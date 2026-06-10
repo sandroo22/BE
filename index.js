@@ -31,7 +31,6 @@ app.post('/api/attivita', (req, res) => {
     res.json(listaAttivita);
 });
 
-// PUT
 app.put('/api/attivita/:id', (req, res) => {
     const idDaModificare = parseInt(req.params.id);
     const nuovoTesto = req.body.testo;
@@ -46,6 +45,14 @@ app.put('/api/attivita/:id', (req, res) => {
     
     // Questo aggiorna solo updatedAt, lasciando createdAt intatto
     listaAttivita[index].updatedAt = new Date(); 
+
+    res.json(listaAttivita);
+});
+
+app.delete('/api/attivita/:id', (req, res) => {
+    const idDaEliminare = parseInt(req.params.id);
+
+    listaAttivita = listaAttivita.filter(attivita => attivita.id !== idDaEliminare);
 
     res.json(listaAttivita);
 });
