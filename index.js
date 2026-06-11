@@ -12,6 +12,8 @@ let listaAttivita = [
     { id: 3, testo: "comprare il pane", createdAt: new Date(), updatedAt: new Date() }
 ];
 
+let contatoreId = 3;
+
 app.get('/api/attivita', (req, res) => {
     res.json(listaAttivita);
 });
@@ -20,8 +22,10 @@ app.post('/api/attivita', (req, res) => {
     const nuovoTesto = req.body.testo;
     if (!nuovoTesto) return res.status(400).json({ errore: "Il testo non può essere vuoto" });
 
+
+
     const nuovaAttivita = {
-        id: Date.now(),
+        id: ++contatoreId,
         testo: nuovoTesto,
         createdAt: new Date(),
         updatedAt: new Date()  
