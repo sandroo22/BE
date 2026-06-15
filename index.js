@@ -41,27 +41,6 @@ db.connect((err) => {
             db.query(createTableQuery, (err) => {
                 if (err) throw err;
                 console.log("Tabella 'attivita' pronta all'uso!");
-                db.query("SELECT COUNT(*) AS totale FROM attivita", (err, results) => {
-                    if (err) throw err;
-
-                    if (results[0].totale === 0) {
-                        console.log("Database vuoto! Inserisco i dati di prova...");
-                        
-                        const insertSeedQuery = `
-                            INSERT INTO attivita (testo) VALUES 
-                            ('Andare a fare la spesa'),
-                            ('Comprare il latte'),
-                            ('Studiare per l\\'esame di stato')
-                        `;
-
-                        db.query(insertSeedQuery, (err) => {
-                            if (err) throw err;
-                            console.log("Dati di prova inseriti con successo!");
-                        });
-                    } else {
-                        console.log("Il database contiene già dei dati.");
-                    }
-                });
             });
         });
     });
