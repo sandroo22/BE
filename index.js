@@ -22,15 +22,15 @@ db.connect((err) => {
     }
     console.log("Connesso al server MySQL!");
 
-    db.query("CREATE DATABASE IF NOT EXISTS todo_db", (err) => {
+    db.query("CREATE DATABASE IF NOT EXISTS film_db", (err) => {
         if (err) throw err;
-        console.log("Database 'todo_db' pronto.");
+        console.log("Database 'film_db' pronto.");
 
-        db.query("USE todo_db", (err) => {
+        db.query("USE film_db", (err) => {
             if (err) throw err;
 
             const createTableQuery = `
-                CREATE TABLE IF NOT EXISTS attivita (
+                CREATE TABLE IF NOT EXISTS film (
                     id INT AUTO_INCREMENT PRIMARY KEY,
                     testo VARCHAR(255) NOT NULL,
                     createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -40,47 +40,44 @@ db.connect((err) => {
             
             db.query(createTableQuery, (err) => {
                 if (err) throw err;
-                console.log("Tabella 'attivita' pronta all'uso!");
+                console.log("Tabella 'film' pronta all'uso!");
             });
         });
     });
 });
 
-// GET 
-app.get('/api/attivita', (req, res) => {
-    db.query("SELECT * FROM attivita", (err, results) => {
+// GET
+app.get('/api/film', (req, res) => {
+    db.query("SELECT * FROM film", (err, results) => {
         if (err) return res.status(500).json({ errore: err.message });
         res.json(results);
     });
 });
 
-//POST
-app.post('/api/attivita', (req, res) => {
-    const nuovoTesto = req.body.testo;
-    if (!nuovoTesto) return res.status(400).json({ errore: "Il testo non può essere vuoto" });
+// POST
+app.post('/api/film', (req, res) => {
+    const nuovoTitolo = req.body.testo;
+    if (!nuovoTitolo) return res.status(400).json({ errore: "Il titolo non può essere vuoto" });
 
-
-    db.query("INSERT INTO attivita (testo) VALUES (?)", [nuovoTesto], (err, result) => {
+    db.query("INSERT INTO film (testo) VALUES (?)", [nuovoTitolo], (err, result) => {
         if (err) return res.status(500).json({ errore: err.message });
         
-        db.query("SELECT * FROM attivita", (err, results) => {
+        db.query("SELECT * FROM film", (err, results) => {
             if (err) return res.status(500).json({ errore: err.message });
             res.json(results);
         });
     });
 });
 
-// PUT
-app.put('/api/attivita/:id', (req, res) => {
+// PUT 
+app.put('/api/film/:id', (req, res) => {
     const idDaModificare = req.params.id;
-    const nuovoTesto = req.body.testo;
+    const nuovoTitolo = req.body.testo;
 
-
-    db.query("UPDATE attivita SET testo = ? WHERE id = ?", [nuovoTesto, idDaModificare], (err, result) => {
+    db.query("UPDATE film SET testo = ? WHERE id = ?", [nuovoTitolo, idDaModificare], (err, result) => {
         if (err) return res.status(500).json({ errore: err.message });
 
-
-        db.query("SELECT * FROM attivita", (err, results) => {
+        db.query("SELECT * FROM film", (err, results) => {
             if (err) return res.status(500).json({ errore: err.message });
             res.json(results);
         });
@@ -88,13 +85,13 @@ app.put('/api/attivita/:id', (req, res) => {
 });
 
 // DELETE
-app.delete('/api/attivita/:id', (req, res) => {
+app.delete('/api/film/:id', (req, res) => {
     const idDaEliminare = req.params.id;
 
-    db.query("DELETE FROM attivita WHERE id = ?", [idDaEliminare], (err, result) => {
+    db.query("DELETE FROM film WHERE id = ?", [idDaEliminare], (err, result) => {
         if (err) return res.status(500).json({ errore: err.message });
         
-        db.query("SELECT * FROM attivita", (err, results) => {
+        db.query("SELECT * FROM film", (err, results) => {
             if (err) return res.status(500).json({ errore: err.message });
             res.json(results);
         });
