@@ -32,11 +32,6 @@ db.connect((err) => {
         db.query("USE film_db", (err) => {
             if (err) throw err;
 
-            db.query("DROP TABLE IF EXISTS film", (err) => {
-    if (err) console.error(err);
-    console.log("Vecchia tabella eliminata!");
-});
-
             // tabella utenti 
             const createUtentiTable = `
                 CREATE TABLE IF NOT EXISTS utenti (
@@ -115,11 +110,10 @@ app.post('/api/login', (req, res) => {
         const utenteUtile = results[0];
 
         try {
-            // Confronta la password inserita con quella criptata nel DB
             const passwordCorretta = await bcrypt.compare(password, utenteUtile.password);
             if (!passwordCorretta) return res.status(400).json({ errore: "Password errata" });
 
-            // Genera il Token JWT inserendo l'ID dell'utente al suo interno
+            // Genera il Token inserendo l'ID dell'utente al suo interno
             const token = jwt.sign({ id: utenteUtile.id, username: utenteUtile.username }, JWT_SECRET, { expiresIn: '24h' });
             
             return res.json({ token });
@@ -146,7 +140,7 @@ app.post('/api/film', autenticaToken, (req, res) => {
     db.query("INSERT INTO film (testo, utente_id) VALUES (?, ?)", [nuovoTitolo, req.utente.id], (err, result) => {
         if (err) return res.status(500).json({ errore: err.message });
         
-        // Ritorna la lista aggiornata solo dei film di questo utente
+        // Ritorna la lista aggiornata solo dei film di un utente
         db.query("SELECT * FROM film WHERE utente_id = ?", [req.utente.id], (err, results) => {
             if (err) return res.status(500).json({ errore: err.message });
             res.json(results);
