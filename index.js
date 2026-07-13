@@ -58,6 +58,17 @@ db.connect((err) => {
                 db.query(createFilmTable, (err) => {
                     if (err) throw err;
                     console.log("Tabella 'film' pronta.");
+                    
+                    // Controllo e aggiunta dinamica della colonna 'copertina'
+                    db.query("SHOW COLUMNS FROM film LIKE 'copertina'", (err, result) => {
+                        if (err) throw err;
+                        if (result.length === 0) {
+                            db.query("ALTER TABLE film ADD COLUMN copertina VARCHAR(1000)", (err) => {
+                                if (err) throw err;
+                                console.log("Colonna 'copertina' aggiunta con successo!");
+                            });
+                        }
+                    });
                 });
             });
         });
@@ -135,9 +146,12 @@ app.get('/api/film', autenticaToken, (req, res) => {
 // POST 
 app.post('/api/film', autenticaToken, (req, res) => {
     const nuovoTitolo = req.body.testo;
+    const nuovaCopertina = req.body.copertina || null; // Cattura la copertina
+    
     if (!nuovoTitolo) return res.status(400).json({ errore: "Il titolo non può essere vuoto" });
 
-    db.query("INSERT INTO film (testo, utente_id) VALUES (?, ?)", [nuovoTitolo, req.utente.id], (err, result) => {
+    // Aggiunto l'inserimento della colonna copertina
+    db.query("INSERT INTO film (testo, copertina, utente_id) VALUES (?, ?, ?)", [nuovoTitolo, nuovaCopertina, req.utente.id], (err, result) => {
         if (err) return res.status(500).json({ errore: err.message });
         
         // Ritorna la lista aggiornata solo dei film di un utente
