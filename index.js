@@ -4,12 +4,39 @@ const mysql = require('mysql2');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+
 const app = express();
 const PORT = 5000;
 const JWT_SECRET = "Catania10!"; 
 
 app.use(cors());
 app.use(express.json());
+
+// Creazione cartella 'uploads' se non esiste
+const uploadDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadDir)) {
+    fs.mkdirSync(uploadDir);
+}
+
+//  Rendi pubblica la cartella 'uploads' (così React può vedere le immagini via URL)
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
+//  Configura Multer (dove salvare i file e come chiamarli)
+const storage = multer.diskStorage({
+    destination: function (req, file, cb) {
+        cb(null, 'uploads/');
+    },
+    filename: function (req, file, cb) {
+        // Aggiunge un timestamp al nome del file per evitare doppioni
+        cb(null, Date.now() + '-' + file.originalname.replace(/\s+/g, '_'));
+    }
+});
+const upload = multer({ storage: storage });
+// --------------------------------------
+
 
 // Connessione a MySQL
 const db = mysql.createConnection({
@@ -32,7 +59,6 @@ db.connect((err) => {
         db.query("USE film_db", (err) => {
             if (err) throw err;
 
-            // tabella utenti 
             const createUtentiTable = `
                 CREATE TABLE IF NOT EXISTS utenti (
                     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -44,7 +70,6 @@ db.connect((err) => {
                 if (err) throw err;
                 console.log("Tabella 'utenti' pronta.");
             
-            // tabella film
                 const createFilmTable = `
                     CREATE TABLE IF NOT EXISTS film (
                         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -59,7 +84,6 @@ db.connect((err) => {
                     if (err) throw err;
                     console.log("Tabella 'film' pronta.");
                     
-                    // Controllo e aggiunta dinamica della colonna 'copertina'
                     db.query("SHOW COLUMNS FROM film LIKE 'copertina'", (err, result) => {
                         if (err) throw err;
                         if (result.length === 0) {
@@ -94,7 +118,6 @@ app.post('/api/register', async (req, res) => {
     if (!username || !password) return res.status(400).json({ errore: "Campi incompleti" });
 
     try {
-        // Criptia la password prima di salvarla
         const salt = await bcrypt.genSalt(10);
         const passwordCriptata = await bcrypt.hash(password, salt);
 
@@ -124,7 +147,6 @@ app.post('/api/login', (req, res) => {
             const passwordCorretta = await bcrypt.compare(password, utenteUtile.password);
             if (!passwordCorretta) return res.status(400).json({ errore: "Password errata" });
 
-            // Genera il Token inserendo l'ID dell'utente al suo interno
             const token = jwt.sign({ id: utenteUtile.id, username: utenteUtile.username }, JWT_SECRET, { expiresIn: '24h' });
             
             return res.json({ token });
@@ -143,18 +165,25 @@ app.get('/api/film', autenticaToken, (req, res) => {
     });
 });
 
-// POST 
-app.post('/api/film', autenticaToken, (req, res) => {
+// POST (AGGIORNATO PER ACCETTARE FILE)
+app.post('/api/film', autenticaToken, upload.single('copertina'), (req, res) => {
     const nuovoTitolo = req.body.testo;
-    const nuovaCopertina = req.body.copertina || null; // Cattura la copertina
+    
+    // Controlliamo se è stato inviato un file fisicamente
+    let urlImmagine = null;
+    if (req.file) {
+        // Se c'è il file, creiamo il link diretto per vederlo dal frontend
+        urlImmagine = `http://localhost:5000/uploads/${req.file.filename}`;
+    } else if (req.body.copertina) {
+        // Fallback: se ha incollato un link di internet, manteniamo quello vecchio
+        urlImmagine = req.body.copertina;
+    }
     
     if (!nuovoTitolo) return res.status(400).json({ errore: "Il titolo non può essere vuoto" });
 
-    // Aggiunto l'inserimento della colonna copertina
-    db.query("INSERT INTO film (testo, copertina, utente_id) VALUES (?, ?, ?)", [nuovoTitolo, nuovaCopertina, req.utente.id], (err, result) => {
+    db.query("INSERT INTO film (testo, copertina, utente_id) VALUES (?, ?, ?)", [nuovoTitolo, urlImmagine, req.utente.id], (err, result) => {
         if (err) return res.status(500).json({ errore: err.message });
         
-        // Ritorna la lista aggiornata solo dei film di un utente
         db.query("SELECT * FROM film WHERE utente_id = ?", [req.utente.id], (err, results) => {
             if (err) return res.status(500).json({ errore: err.message });
             res.json(results);
