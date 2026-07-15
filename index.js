@@ -3,7 +3,6 @@ const cors = require('cors');
 const mysql = require('mysql2');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
@@ -15,30 +14,23 @@ const JWT_SECRET = "Catania10!";
 app.use(cors());
 app.use(express.json());
 
-// Creazione cartella 'uploads' se non esiste
 const uploadDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadDir)) {
     fs.mkdirSync(uploadDir);
 }
 
-//  Rendi pubblica la cartella 'uploads' (così React può vedere le immagini via URL)
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
-//  Configura Multer (dove salvare i file e come chiamarli)
 const storage = multer.diskStorage({
     destination: function (req, file, cb) {
         cb(null, 'uploads/');
     },
     filename: function (req, file, cb) {
-        // Aggiunge un timestamp al nome del file per evitare doppioni
         cb(null, Date.now() + '-' + file.originalname.replace(/\s+/g, '_'));
     }
 });
 const upload = multer({ storage: storage });
-// --------------------------------------
 
-
-// Connessione a MySQL
 const db = mysql.createConnection({
     host: 'localhost',
     user: 'root',     
@@ -68,12 +60,14 @@ db.connect((err) => {
             `;
             db.query(createUtentiTable, (err) => {
                 if (err) throw err;
-                console.log("Tabella 'utenti' pronta.");
             
+                // Aggiunto "visto BOOLEAN DEFAULT FALSE" alla creazione della tabella
                 const createFilmTable = `
                     CREATE TABLE IF NOT EXISTS film (
                         id INT AUTO_INCREMENT PRIMARY KEY,
                         testo VARCHAR(255) NOT NULL,
+                        copertina VARCHAR(1000),
+                        visto BOOLEAN DEFAULT FALSE,
                         utente_id INT NOT NULL,
                         createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
                         updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -82,14 +76,25 @@ db.connect((err) => {
                 `;
                 db.query(createFilmTable, (err) => {
                     if (err) throw err;
-                    console.log("Tabella 'film' pronta.");
                     
+                    // Controlla e aggiunge la colonna copertina se manca
                     db.query("SHOW COLUMNS FROM film LIKE 'copertina'", (err, result) => {
                         if (err) throw err;
                         if (result.length === 0) {
                             db.query("ALTER TABLE film ADD COLUMN copertina VARCHAR(1000)", (err) => {
                                 if (err) throw err;
-                                console.log("Colonna 'copertina' aggiunta con successo!");
+                                console.log("Colonna 'copertina' aggiunta.");
+                            });
+                        }
+                    });
+
+                    // Controlla e aggiunge la colonna visto se manca (per i vecchi record)
+                    db.query("SHOW COLUMNS FROM film LIKE 'visto'", (err, result) => {
+                        if (err) throw err;
+                        if (result.length === 0) {
+                            db.query("ALTER TABLE film ADD COLUMN visto BOOLEAN DEFAULT FALSE", (err) => {
+                                if (err) throw err;
+                                console.log("Colonna 'visto' aggiunta con successo!");
                             });
                         }
                     });
@@ -112,7 +117,6 @@ const autenticaToken = (req, res, next) => {
     });
 };
 
-// REGISTRAZIONE
 app.post('/api/register', async (req, res) => {
     const { username, password } = req.body;
     if (!username || !password) return res.status(400).json({ errore: "Campi incompleti" });
@@ -133,7 +137,6 @@ app.post('/api/register', async (req, res) => {
     }
 });
 
-// LOGIN
 app.post('/api/login', (req, res) => {
     const { username, password } = req.body;
 
@@ -157,7 +160,6 @@ app.post('/api/login', (req, res) => {
     });
 });
 
-// GET
 app.get('/api/film', autenticaToken, (req, res) => {
     db.query("SELECT * FROM film WHERE utente_id = ?", [req.utente.id], (err, results) => {
         if (err) return res.status(500).json({ errore: err.message });
@@ -165,17 +167,13 @@ app.get('/api/film', autenticaToken, (req, res) => {
     });
 });
 
-// POST (AGGIORNATO PER ACCETTARE FILE)
 app.post('/api/film', autenticaToken, upload.single('copertina'), (req, res) => {
     const nuovoTitolo = req.body.testo;
     
-    // Controlliamo se è stato inviato un file fisicamente
     let urlImmagine = null;
     if (req.file) {
-        // Se c'è il file, creiamo il link diretto per vederlo dal frontend
         urlImmagine = `http://localhost:5000/uploads/${req.file.filename}`;
     } else if (req.body.copertina) {
-        // Fallback: se ha incollato un link di internet, manteniamo quello vecchio
         urlImmagine = req.body.copertina;
     }
     
@@ -191,7 +189,7 @@ app.post('/api/film', autenticaToken, upload.single('copertina'), (req, res) => 
     });
 });
 
-// PUT
+// Modifica del testo del film
 app.put('/api/film/:id', autenticaToken, (req, res) => {
     const idDaModificare = req.params.id;
     const nuovoTitolo = req.body.testo;
@@ -206,7 +204,21 @@ app.put('/api/film/:id', autenticaToken, (req, res) => {
     });
 });
 
-// DELETE
+// Cambia lo stato visto/non visto
+app.patch('/api/film/:id/visto', autenticaToken, (req, res) => {
+    const idDaModificare = req.params.id;
+    const nuovoStato = req.body.visto; // true o false
+
+    db.query("UPDATE film SET visto = ? WHERE id = ? AND utente_id = ?", [nuovoStato, idDaModificare, req.utente.id], (err, result) => {
+        if (err) return res.status(500).json({ errore: err.message });
+
+        db.query("SELECT * FROM film WHERE utente_id = ?", [req.utente.id], (err, results) => {
+            if (err) return res.status(500).json({ errore: err.message });
+            res.json(results);
+        });
+    });
+});
+
 app.delete('/api/film/:id', autenticaToken, (req, res) => {
     const idDaEliminare = req.params.id;
 
