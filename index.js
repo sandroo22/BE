@@ -51,17 +51,28 @@ db.connect((err) => {
         db.query("USE film_db", (err) => {
             if (err) throw err;
 
+            // La tabella utenti ora viene creata con "email" invece di "username"
             const createUtentiTable = `
                 CREATE TABLE IF NOT EXISTS utenti (
                     id INT AUTO_INCREMENT PRIMARY KEY,
-                    username VARCHAR(255) NOT NULL UNIQUE,
+                    email VARCHAR(255) NOT NULL UNIQUE,
                     password VARCHAR(255) NOT NULL
                 )
             `;
             db.query(createUtentiTable, (err) => {
                 if (err) throw err;
+                
+                // MIRACOLO AUTOMATICO: se trova la vecchia colonna username, la rinomina in email!
+                db.query("SHOW COLUMNS FROM utenti LIKE 'username'", (err, result) => {
+                    if (err) throw err;
+                    if (result.length > 0) {
+                        db.query("ALTER TABLE utenti CHANGE username email VARCHAR(255) NOT NULL UNIQUE", (err) => {
+                            if (err) throw err;
+                            console.log("Aggiornamento DB: Colonna 'username' rinominata in 'email'!");
+                        });
+                    }
+                });
             
-                // Aggiunto "visto BOOLEAN DEFAULT FALSE" alla creazione della tabella
                 const createFilmTable = `
                     CREATE TABLE IF NOT EXISTS film (
                         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -77,7 +88,6 @@ db.connect((err) => {
                 db.query(createFilmTable, (err) => {
                     if (err) throw err;
                     
-                    // Controlla e aggiunge la colonna copertina se manca
                     db.query("SHOW COLUMNS FROM film LIKE 'copertina'", (err, result) => {
                         if (err) throw err;
                         if (result.length === 0) {
@@ -88,7 +98,6 @@ db.connect((err) => {
                         }
                     });
 
-                    // Controlla e aggiunge la colonna visto se manca (per i vecchi record)
                     db.query("SHOW COLUMNS FROM film LIKE 'visto'", (err, result) => {
                         if (err) throw err;
                         if (result.length === 0) {
@@ -117,17 +126,19 @@ const autenticaToken = (req, res, next) => {
     });
 };
 
+// --- AGGIORNATE LE ROTTE PER USARE L'EMAIL ---
+
 app.post('/api/register', async (req, res) => {
-    const { username, password } = req.body;
-    if (!username || !password) return res.status(400).json({ errore: "Campi incompleti" });
+    const { email, password } = req.body; // Cambiato da username a email
+    if (!email || !password) return res.status(400).json({ errore: "Campi incompleti" });
 
     try {
         const salt = await bcrypt.genSalt(10);
         const passwordCriptata = await bcrypt.hash(password, salt);
 
-        db.query("INSERT INTO utenti (username, password) VALUES (?, ?)", [username, passwordCriptata], (err, result) => {
+        db.query("INSERT INTO utenti (email, password) VALUES (?, ?)", [email, passwordCriptata], (err, result) => {
             if (err) {
-                if (err.code === 'ER_DUP_ENTRY') return res.status(400).json({ errore: "Questo username esiste già!" });
+                if (err.code === 'ER_DUP_ENTRY') return res.status(400).json({ errore: "Questa email esiste già!" });
                 return res.status(500).json({ errore: err.message });
             }
             res.json({ messaggio: "Utente registrato con successo!" });
@@ -138,9 +149,9 @@ app.post('/api/register', async (req, res) => {
 });
 
 app.post('/api/login', (req, res) => {
-    const { username, password } = req.body;
+    const { email, password } = req.body; // Cambiato da username a email
 
-    db.query("SELECT * FROM utenti WHERE username = ?", [username], async (err, results) => {
+    db.query("SELECT * FROM utenti WHERE email = ?", [email], async (err, results) => {
         if (err) return res.status(500).json({ errore: err.message });
         if (results.length === 0) return res.status(400).json({ errore: "Utente non trovato" });
 
@@ -150,7 +161,8 @@ app.post('/api/login', (req, res) => {
             const passwordCorretta = await bcrypt.compare(password, utenteUtile.password);
             if (!passwordCorretta) return res.status(400).json({ errore: "Password errata" });
 
-            const token = jwt.sign({ id: utenteUtile.id, username: utenteUtile.username }, JWT_SECRET, { expiresIn: '24h' });
+            // Inseriamo l'email nel token
+            const token = jwt.sign({ id: utenteUtile.id, email: utenteUtile.email }, JWT_SECRET, { expiresIn: '24h' });
             
             return res.json({ token });
         } catch (erroreProcesso) {
@@ -159,6 +171,8 @@ app.post('/api/login', (req, res) => {
         }
     });
 });
+
+// ---------------------------------------------
 
 app.get('/api/film', autenticaToken, (req, res) => {
     db.query("SELECT * FROM film WHERE utente_id = ?", [req.utente.id], (err, results) => {
@@ -189,7 +203,6 @@ app.post('/api/film', autenticaToken, upload.single('copertina'), (req, res) => 
     });
 });
 
-// Modifica del testo del film
 app.put('/api/film/:id', autenticaToken, (req, res) => {
     const idDaModificare = req.params.id;
     const nuovoTitolo = req.body.testo;
@@ -204,10 +217,9 @@ app.put('/api/film/:id', autenticaToken, (req, res) => {
     });
 });
 
-// Cambia lo stato visto/non visto
 app.patch('/api/film/:id/visto', autenticaToken, (req, res) => {
     const idDaModificare = req.params.id;
-    const nuovoStato = req.body.visto; // true o false
+    const nuovoStato = req.body.visto; 
 
     db.query("UPDATE film SET visto = ? WHERE id = ? AND utente_id = ?", [nuovoStato, idDaModificare, req.utente.id], (err, result) => {
         if (err) return res.status(500).json({ errore: err.message });
