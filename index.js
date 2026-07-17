@@ -104,7 +104,7 @@ db.connect((err) => {
                         CREATE TABLE IF NOT EXISTS attori (
                             id INT AUTO_INCREMENT PRIMARY KEY,
                             nome_cognome VARCHAR(255) NOT NULL,
-                            ruolo VARCHAR(255), -- NUOVO CAMPO
+                            ruolo VARCHAR(255),
                             film_id INT NOT NULL,
                             createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
                             FOREIGN KEY (film_id) REFERENCES film(id) ON DELETE CASCADE
@@ -113,7 +113,6 @@ db.connect((err) => {
                     db.query(createAttoriTable, (err) => {
                         if (err) throw err;
 
-                        // Se la tabella esisteva già da ieri, questo comando aggiunge magicamente la colonna "ruolo" senza cancellare i dati!
                         db.query("SHOW COLUMNS FROM attori LIKE 'ruolo'", (err, result) => {
                             if (err) throw err;
                             if (result.length === 0) {
@@ -145,7 +144,7 @@ const autenticaToken = (req, res, next) => {
     });
 };
 
-// --- ROTTE UTENTI ---
+// ROTTE UTENTI
 app.post('/api/register', async (req, res) => {
     const { email, password } = req.body;
     if (!email || !password) return res.status(400).json({ errore: "Campi incompleti" });
@@ -185,7 +184,7 @@ app.post('/api/login', (req, res) => {
     });
 });
 
-// --- ROTTE FILM ---
+// ROTTE FILM
 app.get('/api/film', autenticaToken, (req, res) => {
     db.query("SELECT * FROM film WHERE utente_id = ?", [req.utente.id], (err, results) => {
         if (err) return res.status(500).json({ errore: err.message });
@@ -245,7 +244,7 @@ app.delete('/api/film/:id', autenticaToken, (req, res) => {
     });
 });
 
-// --- ROTTE ATTORI ---
+// ROTTE ATTORI 
 app.get('/api/film/:filmId/attori', autenticaToken, (req, res) => {
     const filmId = req.params.filmId;
     
@@ -262,7 +261,7 @@ app.get('/api/film/:filmId/attori', autenticaToken, (req, res) => {
 
 app.post('/api/film/:filmId/attori', autenticaToken, (req, res) => {
     const filmId = req.params.filmId;
-    const { nome_cognome, ruolo } = req.body; // ORA ESTRAIAMO ANCHE IL RUOLO
+    const { nome_cognome, ruolo } = req.body; 
 
     if (!nome_cognome) return res.status(400).json({ errore: "Il nome dell'attore è obbligatorio" });
 
@@ -270,10 +269,42 @@ app.post('/api/film/:filmId/attori', autenticaToken, (req, res) => {
         if (err) return res.status(500).json({ errore: err.message });
         if (results.length === 0) return res.status(403).json({ errore: "Accesso negato" });
 
-        // SALVIAMO ANCHE IL RUOLO NEL DATABASE (se non c'è, salva null in automatico)
         db.query("INSERT INTO attori (nome_cognome, ruolo, film_id) VALUES (?, ?, ?)", [nome_cognome, ruolo || null, filmId], (err, result) => {
             if (err) return res.status(500).json({ errore: err.message });
             
+            db.query("SELECT * FROM attori WHERE film_id = ?", [filmId], (err, attori) => {
+                if (err) return res.status(500).json({ errore: err.message });
+                res.json(attori);
+            });
+        });
+    });
+});
+
+//  Modifica di un attore e del suo ruolo
+app.put('/api/attori/:id', autenticaToken, (req, res) => {
+    const attoreId = req.params.id;
+    const { nome_cognome, ruolo } = req.body;
+
+    if (!nome_cognome) return res.status(400).json({ errore: "Il nome dell'attore è obbligatorio" });
+
+    // Controlliamo la sicurezza: l'attore deve appartenere a un film di questo utente
+    const checkQuery = `
+        SELECT attori.film_id FROM attori 
+        JOIN film ON attori.film_id = film.id 
+        WHERE attori.id = ? AND film.utente_id = ?
+    `;
+    
+    db.query(checkQuery, [attoreId, req.utente.id], (err, results) => {
+        if (err) return res.status(500).json({ errore: err.message });
+        if (results.length === 0) return res.status(403).json({ errore: "Accesso negato" });
+
+        const filmId = results[0].film_id;
+
+        const updateQuery = "UPDATE attori SET nome_cognome = ?, ruolo = ? WHERE id = ?";
+        db.query(updateQuery, [nome_cognome, ruolo || null, attoreId], (err, result) => {
+            if (err) return res.status(500).json({ errore: err.message });
+            
+            // Restituiamo la lista aggiornata
             db.query("SELECT * FROM attori WHERE film_id = ?", [filmId], (err, attori) => {
                 if (err) return res.status(500).json({ errore: err.message });
                 res.json(attori);
