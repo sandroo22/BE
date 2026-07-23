@@ -60,15 +60,6 @@ db.connect((err) => {
             `;
             db.query(createUtentiTable, (err) => {
                 if (err) throw err;
-                
-                db.query("SHOW COLUMNS FROM utenti LIKE 'username'", (err, result) => {
-                    if (err) throw err;
-                    if (result.length > 0) {
-                        db.query("ALTER TABLE utenti CHANGE username email VARCHAR(255) NOT NULL UNIQUE", (err) => {
-                            if (err) throw err;
-                        });
-                    }
-                });
             
                 const createFilmTable = `
                     CREATE TABLE IF NOT EXISTS film (
@@ -85,21 +76,28 @@ db.connect((err) => {
                 db.query(createFilmTable, (err) => {
                     if (err) throw err;
                     
+                    // Controlli per aggiornare tabelle vecchie in automatico
                     db.query("SHOW COLUMNS FROM film LIKE 'copertina'", (err, result) => {
                         if (err) throw err;
-                        if (result.length === 0) {
-                            db.query("ALTER TABLE film ADD COLUMN copertina VARCHAR(1000)", (err) => {});
-                        }
+                        if (result.length === 0) db.query("ALTER TABLE film ADD COLUMN copertina VARCHAR(1000)", (err) => {});
                     });
 
                     db.query("SHOW COLUMNS FROM film LIKE 'visto'", (err, result) => {
                         if (err) throw err;
+                        if (result.length === 0) db.query("ALTER TABLE film ADD COLUMN visto BOOLEAN DEFAULT FALSE", (err) => {});
+                    });
+
+                    //  Aggiungiamo la colonna del RATING (da 0 a 5)
+                    db.query("SHOW COLUMNS FROM film LIKE 'rating'", (err, result) => {
+                        if (err) throw err;
                         if (result.length === 0) {
-                            db.query("ALTER TABLE film ADD COLUMN visto BOOLEAN DEFAULT FALSE", (err) => {});
+                            db.query("ALTER TABLE film ADD COLUMN rating INT DEFAULT 0", (err) => {
+                                if (err) throw err;
+                                console.log("Aggiunta colonna 'rating' alla tabella film.");
+                            });
                         }
                     });
 
-                    // Creazione o aggiornamento tabella ATTORI
                     const createAttoriTable = `
                         CREATE TABLE IF NOT EXISTS attori (
                             id INT AUTO_INCREMENT PRIMARY KEY,
@@ -112,18 +110,10 @@ db.connect((err) => {
                     `;
                     db.query(createAttoriTable, (err) => {
                         if (err) throw err;
-
                         db.query("SHOW COLUMNS FROM attori LIKE 'ruolo'", (err, result) => {
                             if (err) throw err;
-                            if (result.length === 0) {
-                                db.query("ALTER TABLE attori ADD COLUMN ruolo VARCHAR(255)", (err) => {
-                                    if (err) throw err;
-                                    console.log("Aggiunta colonna 'ruolo' alla tabella attori.");
-                                });
-                            }
+                            if (result.length === 0) db.query("ALTER TABLE attori ADD COLUMN ruolo VARCHAR(255)", (err) => {});
                         });
-
-                        console.log("Tabella 'attori' pronta.");
                     });
                 });
             });
@@ -144,15 +134,13 @@ const autenticaToken = (req, res, next) => {
     });
 };
 
-// ROTTE UTENTI
+//  ROTTE UTENTI 
 app.post('/api/register', async (req, res) => {
     const { email, password } = req.body;
     if (!email || !password) return res.status(400).json({ errore: "Campi incompleti" });
-
     try {
         const salt = await bcrypt.genSalt(10);
         const passwordCriptata = await bcrypt.hash(password, salt);
-
         db.query("INSERT INTO utenti (email, password) VALUES (?, ?)", [email, passwordCriptata], (err, result) => {
             if (err) {
                 if (err.code === 'ER_DUP_ENTRY') return res.status(400).json({ errore: "Questa email esiste già!" });
@@ -184,7 +172,7 @@ app.post('/api/login', (req, res) => {
     });
 });
 
-// ROTTE FILM
+//  ROTTE FILM 
 app.get('/api/film', autenticaToken, (req, res) => {
     db.query("SELECT * FROM film WHERE utente_id = ?", [req.utente.id], (err, results) => {
         if (err) return res.status(500).json({ errore: err.message });
@@ -233,6 +221,19 @@ app.patch('/api/film/:id/visto', autenticaToken, (req, res) => {
     });
 });
 
+//  Salva il voto (rating)
+app.patch('/api/film/:id/rating', autenticaToken, (req, res) => {
+    const idDaModificare = req.params.id;
+    const nuovoVoto = req.body.rating; 
+    db.query("UPDATE film SET rating = ? WHERE id = ? AND utente_id = ?", [nuovoVoto, idDaModificare, req.utente.id], (err, result) => {
+        if (err) return res.status(500).json({ errore: err.message });
+        db.query("SELECT * FROM film WHERE utente_id = ?", [req.utente.id], (err, results) => {
+            if (err) return res.status(500).json({ errore: err.message });
+            res.json(results);
+        });
+    });
+});
+
 app.delete('/api/film/:id', autenticaToken, (req, res) => {
     const idDaEliminare = req.params.id;
     db.query("DELETE FROM film WHERE id = ? AND utente_id = ?", [idDaEliminare, req.utente.id], (err, result) => {
@@ -244,14 +245,12 @@ app.delete('/api/film/:id', autenticaToken, (req, res) => {
     });
 });
 
-// ROTTE ATTORI 
+//  ROTTE ATTORI
 app.get('/api/film/:filmId/attori', autenticaToken, (req, res) => {
     const filmId = req.params.filmId;
-    
     db.query("SELECT * FROM film WHERE id = ? AND utente_id = ?", [filmId, req.utente.id], (err, results) => {
         if (err) return res.status(500).json({ errore: err.message });
-        if (results.length === 0) return res.status(403).json({ errore: "Accesso negato a questo film" });
-
+        if (results.length === 0) return res.status(403).json({ errore: "Accesso negato" });
         db.query("SELECT * FROM attori WHERE film_id = ?", [filmId], (err, attori) => {
             if (err) return res.status(500).json({ errore: err.message });
             res.json(attori);
@@ -262,16 +261,11 @@ app.get('/api/film/:filmId/attori', autenticaToken, (req, res) => {
 app.post('/api/film/:filmId/attori', autenticaToken, (req, res) => {
     const filmId = req.params.filmId;
     const { nome_cognome, ruolo } = req.body; 
-
-    if (!nome_cognome) return res.status(400).json({ errore: "Il nome dell'attore è obbligatorio" });
-
     db.query("SELECT * FROM film WHERE id = ? AND utente_id = ?", [filmId, req.utente.id], (err, results) => {
         if (err) return res.status(500).json({ errore: err.message });
         if (results.length === 0) return res.status(403).json({ errore: "Accesso negato" });
-
         db.query("INSERT INTO attori (nome_cognome, ruolo, film_id) VALUES (?, ?, ?)", [nome_cognome, ruolo || null, filmId], (err, result) => {
             if (err) return res.status(500).json({ errore: err.message });
-            
             db.query("SELECT * FROM attori WHERE film_id = ?", [filmId], (err, attori) => {
                 if (err) return res.status(500).json({ errore: err.message });
                 res.json(attori);
@@ -280,31 +274,16 @@ app.post('/api/film/:filmId/attori', autenticaToken, (req, res) => {
     });
 });
 
-//  Modifica di un attore e del suo ruolo
 app.put('/api/attori/:id', autenticaToken, (req, res) => {
     const attoreId = req.params.id;
     const { nome_cognome, ruolo } = req.body;
-
-    if (!nome_cognome) return res.status(400).json({ errore: "Il nome dell'attore è obbligatorio" });
-
-    // Controlliamo la sicurezza: l'attore deve appartenere a un film di questo utente
-    const checkQuery = `
-        SELECT attori.film_id FROM attori 
-        JOIN film ON attori.film_id = film.id 
-        WHERE attori.id = ? AND film.utente_id = ?
-    `;
-    
+    const checkQuery = "SELECT attori.film_id FROM attori JOIN film ON attori.film_id = film.id WHERE attori.id = ? AND film.utente_id = ?";
     db.query(checkQuery, [attoreId, req.utente.id], (err, results) => {
         if (err) return res.status(500).json({ errore: err.message });
         if (results.length === 0) return res.status(403).json({ errore: "Accesso negato" });
-
         const filmId = results[0].film_id;
-
-        const updateQuery = "UPDATE attori SET nome_cognome = ?, ruolo = ? WHERE id = ?";
-        db.query(updateQuery, [nome_cognome, ruolo || null, attoreId], (err, result) => {
+        db.query("UPDATE attori SET nome_cognome = ?, ruolo = ? WHERE id = ?", [nome_cognome, ruolo || null, attoreId], (err, result) => {
             if (err) return res.status(500).json({ errore: err.message });
-            
-            // Restituiamo la lista aggiornata
             db.query("SELECT * FROM attori WHERE film_id = ?", [filmId], (err, attori) => {
                 if (err) return res.status(500).json({ errore: err.message });
                 res.json(attori);
@@ -315,13 +294,7 @@ app.put('/api/attori/:id', autenticaToken, (req, res) => {
 
 app.delete('/api/attori/:id', autenticaToken, (req, res) => {
     const attoreId = req.params.id;
-
-    const query = `
-        DELETE attori FROM attori 
-        JOIN film ON attori.film_id = film.id 
-        WHERE attori.id = ? AND film.utente_id = ?
-    `;
-    
+    const query = "DELETE attori FROM attori JOIN film ON attori.film_id = film.id WHERE attori.id = ? AND film.utente_id = ?";
     db.query(query, [attoreId, req.utente.id], (err, result) => {
         if (err) return res.status(500).json({ errore: err.message });
         res.json({ messaggio: "Attore eliminato con successo" });
