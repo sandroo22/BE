@@ -87,7 +87,7 @@ db.connect((err) => {
                         if (result.length === 0) db.query("ALTER TABLE film ADD COLUMN visto BOOLEAN DEFAULT FALSE", (err) => {});
                     });
 
-                    //  Aggiungiamo la colonna del RATING (da 0 a 5)
+                    // Aggiungiamo la colonna del RATING (da 0 a 5)
                     db.query("SHOW COLUMNS FROM film LIKE 'rating'", (err, result) => {
                         if (err) throw err;
                         if (result.length === 0) {
@@ -221,7 +221,6 @@ app.patch('/api/film/:id/visto', autenticaToken, (req, res) => {
     });
 });
 
-//  Salva il voto (rating)
 app.patch('/api/film/:id/rating', autenticaToken, (req, res) => {
     const idDaModificare = req.params.id;
     const nuovoVoto = req.body.rating; 
@@ -245,7 +244,10 @@ app.delete('/api/film/:id', autenticaToken, (req, res) => {
     });
 });
 
+
 //  ROTTE ATTORI
+
+// GET: Leggi gli attori per la modale
 app.get('/api/film/:filmId/attori', autenticaToken, (req, res) => {
     const filmId = req.params.filmId;
     db.query("SELECT * FROM film WHERE id = ? AND utente_id = ?", [filmId, req.utente.id], (err, results) => {
@@ -258,6 +260,7 @@ app.get('/api/film/:filmId/attori', autenticaToken, (req, res) => {
     });
 });
 
+// POST: Salva gli attori in automatico dall'API di TMDb
 app.post('/api/film/:filmId/attori', autenticaToken, (req, res) => {
     const filmId = req.params.filmId;
     const { nome_cognome, ruolo } = req.body; 
@@ -266,39 +269,96 @@ app.post('/api/film/:filmId/attori', autenticaToken, (req, res) => {
         if (results.length === 0) return res.status(403).json({ errore: "Accesso negato" });
         db.query("INSERT INTO attori (nome_cognome, ruolo, film_id) VALUES (?, ?, ?)", [nome_cognome, ruolo || null, filmId], (err, result) => {
             if (err) return res.status(500).json({ errore: err.message });
-            db.query("SELECT * FROM attori WHERE film_id = ?", [filmId], (err, attori) => {
-                if (err) return res.status(500).json({ errore: err.message });
-                res.json(attori);
-            });
+            res.status(201).json({ message: "Attore salvato con successo" });
         });
     });
 });
 
-app.put('/api/attori/:id', autenticaToken, (req, res) => {
-    const attoreId = req.params.id;
-    const { nome_cognome, ruolo } = req.body;
-    const checkQuery = "SELECT attori.film_id FROM attori JOIN film ON attori.film_id = film.id WHERE attori.id = ? AND film.utente_id = ?";
-    db.query(checkQuery, [attoreId, req.utente.id], (err, results) => {
-        if (err) return res.status(500).json({ errore: err.message });
-        if (results.length === 0) return res.status(403).json({ errore: "Accesso negato" });
-        const filmId = results[0].film_id;
-        db.query("UPDATE attori SET nome_cognome = ?, ruolo = ? WHERE id = ?", [nome_cognome, ruolo || null, attoreId], (err, result) => {
-            if (err) return res.status(500).json({ errore: err.message });
-            db.query("SELECT * FROM attori WHERE film_id = ?", [filmId], (err, attori) => {
-                if (err) return res.status(500).json({ errore: err.message });
-                res.json(attori);
-            });
-        });
-    });
+
+//  NUOVE API: GESTIONE TAG DINAMICA 
+
+// GET: Leggi i tag di un film specifico
+app.get('/api/film/:id/tags', autenticaToken, async (req, res) => {
+    const filmId = req.params.id;
+    try {
+        const [checkFilm] = await db.promise().query("SELECT id FROM film WHERE id = ? AND utente_id = ?", [filmId, req.utente.id]);
+        if (checkFilm.length === 0) return res.status(403).json({ error: "Accesso negato al film" });
+
+        const [tags] = await db.promise().query(
+            `SELECT t.id, t.nome, t.colore 
+             FROM tags t
+             JOIN film_tags ft ON t.id = ft.tag_id
+             WHERE ft.film_id = ?`, 
+            [filmId]
+        );
+        res.json(tags);
+    } catch (err) {
+        console.error("Errore recupero tag:", err);
+        res.status(500).json({ error: "Errore interno del server" });
+    }
 });
 
-app.delete('/api/attori/:id', autenticaToken, (req, res) => {
-    const attoreId = req.params.id;
-    const query = "DELETE attori FROM attori JOIN film ON attori.film_id = film.id WHERE attori.id = ? AND film.utente_id = ?";
-    db.query(query, [attoreId, req.utente.id], (err, result) => {
-        if (err) return res.status(500).json({ errore: err.message });
-        res.json({ messaggio: "Attore eliminato con successo" });
-    });
+// POST: Aggiungi un tag a un film
+app.post('/api/film/:id/tags', autenticaToken, async (req, res) => {
+    const filmId = req.params.id;
+    const { nome_tag, colore } = req.body; 
+
+    if (!nome_tag) {
+        return res.status(400).json({ error: "Il nome del tag è obbligatorio" });
+    }
+
+    try {
+        const [checkFilm] = await db.promise().query("SELECT id FROM film WHERE id = ? AND utente_id = ?", [filmId, req.utente.id]);
+        if (checkFilm.length === 0) return res.status(403).json({ error: "Accesso negato al film" });
+
+        const [tagEsistente] = await db.promise().query(
+            "SELECT id FROM tags WHERE nome = ?", [nome_tag]
+        );
+
+        let tagId;
+
+        if (tagEsistente.length > 0) {
+            tagId = tagEsistente[0].id;
+        } else {
+            const coloreTag = colore || '#3b82f6'; 
+            const [nuovoTag] = await db.promise().query(
+                "INSERT INTO tags (nome, colore) VALUES (?, ?)", 
+                [nome_tag, coloreTag]
+            );
+            tagId = nuovoTag.insertId;
+        }
+
+        await db.promise().query(
+            "INSERT IGNORE INTO film_tags (film_id, tag_id) VALUES (?, ?)",
+            [filmId, tagId]
+        );
+
+        res.status(201).json({ message: "Tag salvato e associato con successo!", tag_id: tagId });
+    } catch (err) {
+        console.error("Errore salvataggio tag:", err);
+        res.status(500).json({ error: "Errore interno del server" });
+    }
+});
+
+// DELETE: Rimuovi un tag da un film specifico
+app.delete('/api/film/:filmId/tags/:tagId', autenticaToken, async (req, res) => {
+    const filmId = req.params.filmId;
+    const tagId = req.params.tagId;
+
+    try {
+        const [checkFilm] = await db.promise().query("SELECT id FROM film WHERE id = ? AND utente_id = ?", [filmId, req.utente.id]);
+        if (checkFilm.length === 0) return res.status(403).json({ error: "Accesso negato al film" });
+
+        await db.promise().query(
+            "DELETE FROM film_tags WHERE film_id = ? AND tag_id = ?",
+            [filmId, tagId]
+        );
+
+        res.json({ message: "Tag rimosso dal film con successo!" });
+    } catch (err) {
+        console.error("Errore rimozione tag:", err);
+        res.status(500).json({ error: "Errore interno del server" });
+    }
 });
 
 app.listen(PORT, () => {
