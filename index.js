@@ -32,11 +32,12 @@ const storage = multer.diskStorage({
 const upload = multer({ storage: storage });
 
 const db = mysql.createConnection({
-    host: 'localhost',
+    host: process.env.DB_HOST || 'localhost',
     user: 'root',     
     password: ''     
 });
 
+// --- NUOVA CONNESSIONE CON AUTO-CREAZIONE TABELLE ---
 db.connect((err) => {
     if (err) {
         console.error("Errore di connessione a MySQL:", err);
@@ -46,9 +47,75 @@ db.connect((err) => {
 
     db.query("CREATE DATABASE IF NOT EXISTS film_db", (err) => {
         if (err) throw err;
-        db.query("USE film_db");
+        db.query("USE film_db", (err) => {
+            if (err) throw err;
+            
+            const queryUtenti = `CREATE TABLE IF NOT EXISTS utenti (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                email VARCHAR(255) UNIQUE NOT NULL,
+                password VARCHAR(255) NOT NULL
+            )`;
+            
+            const queryListe = `CREATE TABLE IF NOT EXISTS liste (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                nome VARCHAR(255) NOT NULL,
+                utente_id INT NOT NULL,
+                is_default BOOLEAN DEFAULT FALSE,
+                FOREIGN KEY (utente_id) REFERENCES utenti(id) ON DELETE CASCADE
+            )`;
+            
+            const queryFilm = `CREATE TABLE IF NOT EXISTS film (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                testo VARCHAR(255) NOT NULL,
+                copertina VARCHAR(255),
+                visto BOOLEAN DEFAULT FALSE,
+                rating INT DEFAULT 0,
+                utente_id INT NOT NULL,
+                lista_id INT,
+                FOREIGN KEY (utente_id) REFERENCES utenti(id) ON DELETE CASCADE,
+                FOREIGN KEY (lista_id) REFERENCES liste(id) ON DELETE SET NULL
+            )`;
+
+            const queryAttori = `CREATE TABLE IF NOT EXISTS attori (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                nome_cognome VARCHAR(255) NOT NULL,
+                ruolo VARCHAR(255),
+                film_id INT NOT NULL,
+                FOREIGN KEY (film_id) REFERENCES film(id) ON DELETE CASCADE
+            )`;
+
+            const queryTags = `CREATE TABLE IF NOT EXISTS tags (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                nome VARCHAR(50) UNIQUE NOT NULL,
+                colore VARCHAR(20) DEFAULT '#3b82f6'
+            )`;
+
+            const queryFilmTags = `CREATE TABLE IF NOT EXISTS film_tags (
+                film_id INT NOT NULL,
+                tag_id INT NOT NULL,
+                PRIMARY KEY (film_id, tag_id),
+                FOREIGN KEY (film_id) REFERENCES film(id) ON DELETE CASCADE,
+                FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
+            )`;
+
+            // Eseguiamo le query in sequenza per rispettare le dipendenze delle chiavi esterne
+            db.query(queryUtenti, () => {
+                db.query(queryListe, () => {
+                    db.query(queryFilm, () => {
+                        db.query(queryAttori, () => {
+                            db.query(queryTags, () => {
+                                db.query(queryFilmTags, () => {
+                                    console.log("Tabelle verificate/create con successo!");
+                                });
+                            });
+                        });
+                    });
+                });
+            });
+        });
     });
 });
+// ----------------------------------------------------
 
 const autenticaToken = (req, res, next) => {
     const authHeader = req.headers['authorization'];
@@ -115,7 +182,7 @@ app.post('/api/login', (req, res) => {
             await db.promise().query("UPDATE film SET lista_id = ? WHERE utente_id = ? AND lista_id IS NULL", [defaultListId, utenteUtile.id]);
             // --------------------------------------------------------------------------
 
-            const token = jwt.sign({ id: utenteUtile.id, email: utenteUtile.email }, JWT_SECRET, { expiresIn: '24h' });
+            const token = jwt.sign({ id: utenteUtile.id, email: utenteUtile.email }, JWT_SECRET, { expiresIn: '365d' });
             return res.json({ token });
         } catch (erroreProcesso) {
             return res.status(500).json({ errore: "Errore interno del server" });
@@ -186,7 +253,7 @@ app.get('/api/film', autenticaToken, (req, res) => {
 app.post('/api/film', autenticaToken, upload.single('copertina'), async (req, res) => {
     const nuovoTitolo = req.body.testo;
     let urlImmagine = null;
-    let listaIdTarget = req.body.lista_id; // Frontend potrebbe mandarlo
+    let listaIdTarget = req.body.lista_id; 
 
     if (req.file) urlImmagine = `http://localhost:5000/uploads/${req.file.filename}`;
     else if (req.body.copertina) urlImmagine = req.body.copertina;
@@ -214,7 +281,6 @@ app.post('/api/film', autenticaToken, upload.single('copertina'), async (req, re
 
 app.put('/api/film/:id', autenticaToken, (req, res) => {
     const idDaModificare = req.params.id;
-    // Permettiamo di aggiornare anche il lista_id, in modo che l'utente possa spostare i film da una cartella all'altra!
     const { testo, lista_id } = req.body; 
 
     let query = "UPDATE film SET testo = ?";
@@ -382,6 +448,75 @@ app.delete('/api/film/:filmId/tags/:tagId', autenticaToken, async (req, res) => 
     }
 });
 
+// --- EXPORT JSON ---
+app.get('/api/export', autenticaToken, async (req, res) => {
+    try {
+        // 1. Prendiamo tutte le liste dell'utente loggato
+        const [liste] = await db.promise().query("SELECT nome, is_default FROM liste WHERE utente_id = ?", [req.utente.id]);
+        // 2. Prendiamo tutti i film e associamo il NOME della loro lista
+        const [film] = await db.promise().query(`
+            SELECT f.testo, f.copertina, f.visto, f.rating, l.nome as lista_nome
+            FROM film f
+            LEFT JOIN liste l ON f.lista_id = l.id
+            WHERE f.utente_id = ?
+        `, [req.utente.id]);
+        
+        // Inviamo il pacchetto JSON completo
+        res.json({ liste, film });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "Errore durante l'esportazione." });
+    }
+});
+
+// --- IMPORT JSON ---
+app.post('/api/import', autenticaToken, async (req, res) => {
+    const { liste, film } = req.body;
+    if (!liste || !film) return res.status(400).json({ error: "Formato JSON non valido." });
+
+    try {
+        // Inizia la transazione (così se c'è un errore, annulla tutto senza rompere il DB)
+        await db.promise().beginTransaction();
+
+        // 1. Elimina i film e le liste attuali dell'UTENTE LOGGATO (tranne la lista Generale di default)
+        await db.promise().query("DELETE FROM film WHERE utente_id = ?", [req.utente.id]);
+        await db.promise().query("DELETE FROM liste WHERE utente_id = ? AND is_default = FALSE", [req.utente.id]);
+
+        // 2. Ricrea le liste dal JSON
+        for (const l of liste) {
+            if (!l.is_default) {
+                await db.promise().query("INSERT IGNORE INTO liste (nome, utente_id, is_default) VALUES (?, ?, FALSE)", [l.nome, req.utente.id]);
+            }
+        }
+
+        // 3. Riprendiamo i nuovi ID delle liste appena create (per mapparli correttamente)
+        const [listeAttuali] = await db.promise().query("SELECT id, nome, is_default FROM liste WHERE utente_id = ?", [req.utente.id]);
+        const mappaListe = {};
+        let defaultListId = null;
+        listeAttuali.forEach(l => {
+            mappaListe[l.nome] = l.id;
+            if (l.is_default) defaultListId = l.id;
+        });
+
+        // 4. Inseriamo tutti i film, riassegnandoli alla lista corretta
+        for (const f of film) {
+            const lista_id = mappaListe[f.lista_nome] || defaultListId;
+            await db.promise().query(
+                "INSERT INTO film (testo, copertina, visto, rating, utente_id, lista_id) VALUES (?, ?, ?, ?, ?, ?)",
+                [f.testo, f.copertina || null, f.visto || false, f.rating || 0, req.utente.id, lista_id]
+            );
+        }
+
+        // Se tutto è andato bene, conferma i cambiamenti!
+        await db.promise().commit();
+        res.json({ message: "Importazione completata!" });
+    } catch (err) {
+        // In caso di errore, rollback annulla tutte le modifiche fatte finora!
+        await db.promise().rollback();
+        console.error(err);
+        res.status(500).json({ error: "Errore durante l'importazione." });
+    }
+});
 
 app.listen(PORT, () => {
     console.log(`Server attivo sulla porta ${PORT}`);
